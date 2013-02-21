@@ -1,0 +1,244 @@
+Analyzing Learning Opportunities Index dataset from TDSB
+========================================================
+
+```
+Author: Bodong Chen
+Date: Feb 20, 2013
+```
+
+Every two years since 2009, the Toronto District School Board releases the Learning Opportunities Index (LOI), an index that ranks public schools based on a range of indicators that measure external challenges affecting student success. According to [TDSB](http://www.tdsb.on.ca/about_us/media_room/Room.asp?show=OtherNews&view=detailed&enableNav=true&self=17985), one goal of releasing this index is to ensure that children who have access to fewer resources at home and in their neighbourhoods will get a more equitable chance to succeed in their schools. In [the most recent report](http://www.tdsb.on.ca/_site/ViewItem.asp?siteid=172&menuid=30120&pageid=25791) published in 2011, TDSB released LOI scores and ranks of all elementary and secondary public schools from both 2009 and 2011. This dataset, regardless of its simple structure, appears to be an interesting dataset to play with for learning [R](http://www.r-project.org/). 
+
+(Disclaimer: This blog post is not to prove anything or to test any hypothesis. Rather, it represents my personal attempt to access and make sense of publicly available data.)
+
+Retrieve and Clean Dataset
+----------
+
+It didn't take long to convert the tables from [the PDF report](http://www.tdsb.on.ca/_site/ViewItem.asp?siteid=172&menuid=30120&pageid=25791) to a clean CSV format since the data is already nicely formatted in the report. (But it will be even nicer if the school board could consider releasing such dataset in more accessible formats in the future in the spirit of "open data".)
+
+So now I can load the dataset into R for analysis.
+
+
+```{r message=FALSE}
+library(ggplot2)
+library(plyr)
+library(reshape2)
+library(psych)
+
+# read data
+loi <- read.csv("data/loi.csv", stringsAsFactors=FALSE)
+loi$type <- factor(loi$type, levels=c(1,2), labels=c("Elementary", "Secondary"))
+```
+
+The structure of the dataset:
+```{r}
+# structure of dataset
+str(loi)
+```
+
+Exploratory Analysis
+---------------------
+
+### A quick look at LOI
+
+LOI scores of schools in 2009 and 2011 are the core data that are of interest in the dataset. So first I am going to check their distributions by doing some quick visualizations.
+
+```{r warning=FALSE}
+# melt data to long format, for easier visualization
+loi_long <- melt(data=loi, 
+                 id.vars=c("id","name","type"), 
+                 measure.vars=c("score2009", "score2011"), 
+                 variable.name="year", 
+                 value.name="score")
+
+# jitter plots of LOI, by year and school type
+ggplot(loi_long, aes(x=type, y=score)) + 
+  geom_jitter(alpha=I(1/2), aes(color=type)) + 
+  facet_wrap(~year, ncol=2)
+
+# histograms of LOI, by year and school type
+ggplot(loi_long, aes(x=score, fill=type)) + 
+  geom_histogram(binwidth=.1, colour="white") +
+  facet_grid(type ~ year, scales="free_y")
+```
+
+Overall, LOI scores of schools are distributed quite evenly from 0 to 1, for both elementary and secondary schools. But the high portion of schools with LOI below 0.1 strikes me a little bit.
+
+Then I checked whether average LOI scores of elementary and secondary schools are different.
+
+```{r}
+# check difference between school types
+summary <- ddply(loi, .(type), summarise, mean=mean(score2011), sd=sd(score2011))
+ggplot(summary, aes(x=type, y=mean, fill=type)) +
+  geom_bar(stat="identity") +
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.1) +
+  xlab("School Type") + ylab("LOI 2011") +
+  ggtitle("School LOI by type") +
+  guides(fill=FALSE)
+```
+
+Not surprisingly, the answer is no.
+
+### Change of LOI from 2009 to 2011
+
+LOI score for a school is not very likely to change within two years. So it's very likely score2009 is highly correlated with score2011.
+
+```{r warning=FALSE}
+# correlations
+cor.test(~ score2009 + score2011, loi)
+
+# scatterplots of score2009 and score2011
+# with separate regression lines for elementary and secondary
+ggplot(loi, aes(x=score2009, y=score2011, color=type)) + 
+  geom_point(shape=1) +
+  scale_colour_hue(l=50) + 
+  geom_smooth(method=lm, se=FALSE)
+```
+
+The answer is yes, score2009 is significantly correlated with score2011, for both elementary and secondary schools. But it's very interesting that at both ends of the regression lines, schools seem to stand still at where they are, while there is more vibration in the middle ground.
+
+Let's take a closer look at the change of LOI scores.
+
+```{r}
+# compute change of LOI
+loi$change <- loi$score2011 - loi$score2009
+# summary
+round(t(psych::describe(loi$change)), 1)
+
+# plot it
+qplot(loi$change, binwidth=.01)
+```
+
+It appears that the change of LOI from 2009 to 2011 is close to normal distribution. At the same time, I notice there is outlier(s) whose LOI score(s) increased for more than 0.2 from 2009 to 2011. That's a quite remarkable growth.
+
+```{r}
+# school(s) that deserve applause
+loi$name[na.omit(loi$change) > 0.2]
+```
+
+Coming back to the interesting phenomenon that schools at both ends tend to stick to their original place, let's plot change of LOI with score2011.
+
+```{r warning=FALSE}
+# plot LOI change with score2011, respectively for elementary and secondary
+ggplot(loi, aes(x=score2011, y=change, color=type)) + 
+  geom_point(shape=1) +
+  scale_colour_hue(l=50) + 
+  facet_wrap(~type, ncol=1) +
+  geom_smooth(method=lm, se=FALSE)
+```
+
+In this plot, this phenomenon is even more evident. I may need to dig into the methodology of measuring LOI to make sense of this results. But one possible cause is that ceiling effect (not sure I am using this term properly) that limits the direction of change at both ends.
+
+We can do the same thing for school rank change.
+
+```{r warning=FALSE}
+# compute rank change
+loi$rankchange <- loi$rank2011 - loi$rank2009
+
+# plot rank change
+ggplot(loi, aes(x=score2011, y=rankchange, color=type)) + 
+  geom_point(shape=1) +
+  scale_colour_hue(l=50) + 
+  facet_wrap(~type, ncol=1) +
+  geom_smooth(method=lm, se=FALSE)
+```
+
+Interestingly the ranks for secondary schools are more stable comparing to elementary schools, although their scores vibrate on the middle ground. Maybe it's simply because the number of secondary schools is smaller than elementary schools and a slight change with LOI for a school is less likely to affect its ranking.
+
+It is also interesting that the regression line for scores of elementary schools is slightly going upwards, while the line for ranks of those schools is slightly going downwards. Although further significance test is needed to make any claim, this may suggest learning opportunities are getting slightly more equitable for elementary schools.
+
+Some Wired Stuff
+-----------------
+
+What are common words in TDSB school names? (inspired by [this post](http://jeromyanglim.blogspot.ca/2012/05/example-reproducile-report-using-r.html))
+
+```{r}
+# create a vector of the words that occur in school names
+lw <- unlist(strsplit(loi$name, split = " "))
+
+# remove stopwords that are not very informative
+stopwords <- c("School", "Public", "Senior", "Junior", 
+               "Middle", "Elementary", "Secondary", 
+               "and", "of", "for", "the")
+lw <- lw[!(lw %in% stopwords)]
+
+# extract words longer than 1, because there are many initials in school names
+# loi$name[grep("[A-Z] +", loi$name)]
+lw <- lw[nchar(lw) > 1]
+
+# create a table of the frequency of school names
+tlw <- table(lw)
+
+# extract cells of table with count greater than 3
+tlw2 <- tlw[tlw > 3]
+
+# sorted in decreasing order
+tlw2 <- sort(tlw2, decreasing = TRUE)
+
+# values as proporitions
+tlw2p <- round(tlw2/nrow(loi), 3)
+
+# show this in a bar graph
+tlw2pdf <- data.frame(word = names(tlw2p), prop = as.numeric(tlw2p), stringsAsFactors = FALSE)
+tlw2pdf
+
+# the following doesn't work when publishing to WordPress
+# because of a bug with the 'evaluate' package
+ggplot(tlw2pdf, aes(x=word, y=prop)) + geom_bar(stat="identity") + coord_flip()
+
+# make it log counts
+ggplot(tlw2pdf, aes(word, log(prop * nrow(loi)))) + geom_bar(stat="identity") + coord_flip()
+```
+
+It seems a lot of school names are related to locations, like park, street, valley, heights, etc, and many schools are affiliated with academic institutions, reflected by words like institute, collegiate, academy, arts, etc.
+
+Is the number of words in the school name related to LOI scores and LOI change?
+
+```{r}
+# compute word count of names
+loi$nameWordCount <- sapply(strsplit(loi$name, " "), length)
+# histogram
+ggplot(loi, aes(x=nameWordCount, fill=type)) + geom_histogram(binwidth=1, alpha=.5, position="identity")
+
+# correlations
+loi_cor <- loi[ , c(4, 6, 8, 10)] # get relevant columns
+# correlation test
+corr.test(na.omit(loi_cor))
+
+# correlation between LOI change and word count of school names
+corr <- cor.test(loi$change, loi$nameWordCount, use="pairwise.complete.obs")
+```
+
+Interestingly, the word count of school names is significantly correlated with change of LOI from 2009 to 2011, *r* = `r round(corr$estimate, 2)`, *p* = `r round(corr$p.value, 3)`. The longer the school name is, the less likely its LOI increases from 2009 to 2011. I believe it's just a funny coincidence. :)
+
+Are schools with nice seemingly affiliated with academic institutions doing better academically?
+
+```{r}
+# relevant words
+academynames <- c("Institute", "Collegiate", "Academy")
+
+# find out for each school name whether it contains any of those words
+schsplit <- strsplit(loi$name, " ")
+loi$hasAcademy <- sapply(schsplit, function(X) length(intersect(X, academynames)) > 0)
+
+# t test
+t_test <- t.test(loi$score2011 ~ loi$hasAcademy)
+t_test
+```
+
+The answer is no, *t*(`r round(t_test$parameter, 0)`) = `r round(t_test$statistic, 2)`, *p* = `r round(t_test$p.value, 2)`.
+
+```{r echo=FALSE}
+# save the final data
+write.csv(loi, file = "data/loi_final.csv")
+```
+
+
+Further Analysis
+--------------------
+
+One analysis I wish to do but don't know how at this moment is to introduce GIS data of each school into this analysis and visualize average LOI score for each region in Toronto. The hard part is to retrieve geotag information for each school. [Calling Google Map API from R](http://statisfaction.wordpress.com/2011/10/05/calling-google-maps-api-from-r/) seems to be a promising direction to follow.
+
+Blogging from R
+-----------------
+
+By the way, I am posting this blog directly from R, following [this tutorial](http://yihui.name/knitr/demo/wordpress/) using knitr and RWordPress.
